@@ -27,20 +27,28 @@ def requireCommands(commands):
         sys.exit(1)
 
 
-def getVolumes(filename):
-    volumes = {}
+def walkISO(filename, extension):
+    found = {}
     iso = PyCdlib()
     iso.open(filename)
     for root, dirs, files in iso.walk(iso_path="/"):
         for f in files:
-            if ".zip" in f.lower():
-                dist = os.path.basename(root)
-                if dist not in volumes:
-                    volumes[dist] = []
-                volumes[dist].append(os.path.splitext(f)[0])
+            if ".{}".format(extension) in f.lower():
+                parent = os.path.basename(root)
+                if parent not in found:
+                    found[parent] = []
+                found[parent].append(os.path.splitext(f)[0])
     iso.close()
 
-    return volumes
+    return found
+
+
+def getTapes(iso):
+    return walkISO(iso, "ipl")
+
+
+def getVolumes(iso):
+    return walkISO(iso, "zip")
 
 
 def checkPath(path, overwrite=False):
@@ -74,32 +82,72 @@ def extractZip(zip_filename):
                 yield (fname, p.stdout)
 
 
+def getFileFromIso(iso_filename, dist, filename, dest=None, overwrite=False):
+    if dest is None:
+        dest = os.getcwd()
+
+    dest_filename = os.path.join(dest, filename)
+
+    iso = PyCdlib()
+    iso.open(iso_filename)
+
+    if checkPath(dest_filename, overwrite):
+        os.remove(dest_filename)
+
+    try:
+        iso.get_file_from_iso(dest_filename, iso_path=os.path.join("/", dist, filename))
+    except PyCdlibInvalidInput as e:
+        iso.get_file_from_iso(
+            dest_filename, iso_path=os.path.join("/", dist, "{};1".format(filename))
+        )
+    iso.close()
+
+    return dest_filename
+
+
+def convertTape(filename, dist, tape, compression="zlib", dest=None, overwrite=False):
+    if dest is None:
+        dest = os.getcwd()
+
+    tape_in = getFileFromIso(filename, dist, "{}.IPL".format(tape), dest, overwrite)
+    tape_out = os.path.join(dest, "{}.het".format(tape))
+
+    cmd = ["hetupd"]
+    if compression == "zlib":
+        cmd.append("-z")
+    elif compression == "bzip2":
+        cmd.append("-b")
+    elif compression == "none":
+        cmd.append("-d")
+    cmd += [tape_in, tape_out]
+
+    subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+    )
+
+    os.remove(tape_in)
+
+    return tape_out
+
+
 def extractVolume(filename, dist, volume, dest=None, overwrite=False):
     if dest is None:
         dest = os.getcwd()
 
     images = []
-    iso = PyCdlib()
-    iso.open(filename)
-    with tempfile.NamedTemporaryFile(dir=dest) as fp:
-        try:
-            iso.get_file_from_iso_fp(
-                fp, iso_path=os.path.join("/", dist, "{}.ZIP;1".format(volume))
-            )
-        except PyCdlibInvalidInput as e:
-            iso.get_file_from_iso_fp(
-                fp, iso_path=os.path.join("/", dist, "{}.ZIP".format(volume))
-            )
 
-        for fname, zfp in extractZip(fp.name):
-            image_name = os.path.basename(fname)
-            image = os.path.join(dest, image_name)
-            checkPath(image, overwrite)
-            with open(image, "wb+") as f:
-                f.write(zfp.read())
-            images.append(image)
+    zip_filename = getFileFromIso(
+        filename, dist, "{}.ZIP".format(volume), dest, overwrite
+    )
+    for fname, zfp in extractZip(zip_filename):
+        image_name = os.path.basename(fname)
+        image = os.path.join(dest, image_name)
+        checkPath(image, overwrite)
+        with open(image, "wb+") as f:
+            f.write(zfp.read())
+        images.append(image)
 
-    iso.close()
+    os.remove(zip_filename)
 
     return sorted(images)
 
@@ -124,13 +172,27 @@ def cli():
 )
 @click.argument("iso", type=click.Path(exists=True, dir_okay=False))
 def convert(destination, force, compression, quiet, output_format, iso):
-    requireCommands(["dasdcopy", "unzip"])
-    volumes = getVolumes(iso)
-    if not volumes:
-        click.echo("No volumes found!", err=True)
-        sys.exit(1)
+    requireCommands(["dasdcopy", "hetupd", "unzip"])
+    iso_tapes = getTapes(iso)
+    if not iso_tapes:
+        click.echo("No tapes found.", err=True)
+    for dist, tapes in iso_tapes.items():
+        for tape in tapes:
+            if not quiet:
+                click.echo("Converting {} tape {}...".format(dist, tape))
+            tape_out = convertTape(iso, dist, tape, compression, destination, force)
+            if not quiet:
+                click.echo(
+                    "{} tape {} converted to {}".format(
+                        dist, tape, os.path.basename(tape_out)
+                    )
+                )
 
-    for dist, vols in volumes.items():
+    iso_volumes = getVolumes(iso)
+    if not iso_volumes:
+        click.echo("No volumes found.", err=True)
+
+    for dist, vols in iso_volumes.items():
         for vol in vols:
             if not quiet:
                 click.echo("Extracting {} volume {}...".format(dist, vol))
@@ -193,10 +255,15 @@ def convert(destination, force, compression, quiet, output_format, iso):
 @cli.command()
 @click.argument("iso", type=click.Path(exists=True, dir_okay=False))
 def dump(iso):
-    volumes = getVolumes(iso)
-    if volumes:
-        for dist, vols in volumes.items():
-            click.echo("{}: {}".format(dist, " ".join(sorted(vols))))
+    iso_tapes = getTapes(iso)
+    if iso_tapes:
+        for dist, tapes in iso_tapes.items():
+            click.echo("{} tapes: {}".format(dist, " ".join(sorted(tapes))))
+
+    iso_volumes = getVolumes(iso)
+    if iso_volumes:
+        for dist, vols in iso_volumes.items():
+            click.echo("{} volumes: {}".format(dist, " ".join(sorted(vols))))
 
 
 if __name__ == "__main__":
