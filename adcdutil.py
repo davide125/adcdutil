@@ -182,102 +182,119 @@ def cli():
     default="CCKD",
     help="Volume output format.",
 )
-@click.argument("iso", type=click.Path(exists=True, dir_okay=False))
+@click.argument("iso", type=click.Path(exists=True, dir_okay=False), nargs=-1)
 def convert(destination, force, compression, quiet, output_format, iso):
     """Convert ADCD image into Hercules formats."""
     requireCommands(["dasdcopy", "hetupd", "unzip"])
-    iso_tapes = getTapes(iso)
-    if not iso_tapes:
-        click.echo("No tapes found.", err=True)
-    for dist, tapes in iso_tapes.items():
-        for tape in tapes:
-            if not quiet:
-                click.echo("Converting {} tape {}...".format(dist, tape))
-            tape_out = convertTape(iso, dist, tape, compression, destination, force)
-            if not quiet:
-                click.echo(
-                    "{} tape {} converted to {}".format(
-                        dist, tape, os.path.basename(tape_out)
-                    )
+
+    for iso_image in iso:
+        click.echo(iso_image)
+        iso_tapes = getTapes(iso_image)
+        if not iso_tapes:
+            click.echo("No tapes found.", err=True)
+        for dist, tapes in iso_tapes.items():
+            for tape in tapes:
+                if not quiet:
+                    click.echo("Converting {} tape {}...".format(dist, tape))
+                tape_out = convertTape(
+                    iso_image, dist, tape, compression, destination, force
                 )
-
-    iso_volumes = getVolumes(iso)
-    if not iso_volumes:
-        click.echo("No volumes found.", err=True)
-
-    for dist, vols in iso_volumes.items():
-        for vol in vols:
-            if not quiet:
-                click.echo("Extracting {} volume {}...".format(dist, vol))
-            images = extractVolume(iso, dist, vol, destination, force)
-            if len(images) == 0:
-                click.echo("No images extracted!", err=True)
-                sys.exit(1)
-            elif len(images) == 1:
-                vol_in = images[0]
                 if not quiet:
                     click.echo(
-                        "Found single-file image: {}".format(os.path.basename(vol_in))
-                    )
-            else:
-                vol_in = "{}.img".format(images[0].split("_")[0])
-                if not quiet:
-                    click.echo(
-                        "Found multi-file image, converting to single-file: {}".format(
-                            os.path.basename(vol_in)
+                        "{} tape {} converted to {}".format(
+                            dist, tape, os.path.basename(tape_out)
                         )
                     )
+
+        iso_volumes = getVolumes(iso_image)
+        if not iso_volumes:
+            click.echo("No volumes found.", err=True)
+
+        for dist, vols in iso_volumes.items():
+            for vol in vols:
+                if not quiet:
+                    click.echo("Extracting {} volume {}...".format(dist, vol))
+                images = extractVolume(iso_image, dist, vol, destination, force)
+                if len(images) == 0:
+                    click.echo("No images extracted!", err=True)
+                    sys.exit(1)
+                elif len(images) == 1:
+                    vol_in = images[0]
+                    if not quiet:
+                        click.echo(
+                            "Found single-file image: {}".format(
+                                os.path.basename(vol_in)
+                            )
+                        )
+                else:
+                    vol_in = "{}.img".format(images[0].split("_")[0])
+                    if not quiet:
+                        click.echo(
+                            "Found multi-file image, converting to single-file: {}".format(
+                                os.path.basename(vol_in)
+                            )
+                        )
+                    cmd = ["dasdcopy", "-q"]
+                    if checkPath(vol_in, force):
+                        cmd.append("-r")
+                    cmd += ["-lfs", images[0], vol_in]
+                    subprocess.run(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                    )
+                    for img in images:
+                        os.remove(img)
+
+                vol_out = "{}.{}".format(
+                    os.path.splitext(vol_in)[0], output_format.lower()
+                )
+                if not quiet:
+                    click.echo("Converting to {}...".format(output_format))
                 cmd = ["dasdcopy", "-q"]
-                if checkPath(vol_in, force):
+                if checkPath(vol_out, force):
                     cmd.append("-r")
-                cmd += ["-lfs", images[0], vol_in]
+                if compression == "zlib":
+                    cmd.append("-z")
+                elif compression == "bzip2":
+                    cmd.append("-bz2")
+                elif compression == "none":
+                    cmd.append("-0")
+                cmd += ["-o", output_format.upper(), vol_in, vol_out]
                 subprocess.run(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=True,
                 )
-                for img in images:
-                    os.remove(img)
-
-            vol_out = "{}.{}".format(os.path.splitext(vol_in)[0], output_format.lower())
-            if not quiet:
-                click.echo("Converting to {}...".format(output_format))
-            cmd = ["dasdcopy", "-q"]
-            if checkPath(vol_out, force):
-                cmd.append("-r")
-            if compression == "zlib":
-                cmd.append("-z")
-            elif compression == "bzip2":
-                cmd.append("-bz2")
-            elif compression == "none":
-                cmd.append("-0")
-            cmd += ["-o", output_format.upper(), vol_in, vol_out]
-            subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
-            )
-            os.remove(vol_in)
-            if not quiet:
-                click.echo(
-                    "{} volume {} converted to {}".format(
-                        dist, vol, os.path.basename(vol_out)
+                os.remove(vol_in)
+                if not quiet:
+                    click.echo(
+                        "{} volume {} converted to {}".format(
+                            dist, vol, os.path.basename(vol_out)
+                        )
                     )
-                )
+        click.echo()
 
 
 @cli.command()
-@click.argument("iso", type=click.Path(exists=True, dir_okay=False))
+@click.argument("iso", type=click.Path(exists=True, dir_okay=False), nargs=-1)
 def dump(iso):
     """Dump details and contents of an ADCD image."""
-    iso_tapes = getTapes(iso)
-    if iso_tapes:
-        for dist, tapes in iso_tapes.items():
-            click.echo("{} tapes: {}".format(dist, " ".join(sorted(tapes))))
+    for iso_image in iso:
+        click.echo(iso_image)
 
-    iso_volumes = getVolumes(iso)
-    if iso_volumes:
-        for dist, vols in iso_volumes.items():
-            click.echo("{} volumes: {}".format(dist, " ".join(sorted(vols))))
+        iso_tapes = getTapes(iso_image)
+        if iso_tapes:
+            for dist, tapes in iso_tapes.items():
+                click.echo("{} tapes: {}".format(dist, " ".join(sorted(tapes))))
+
+        iso_volumes = getVolumes(iso_image)
+        if iso_volumes:
+            for dist, vols in iso_volumes.items():
+                click.echo("{} volumes: {}".format(dist, " ".join(sorted(vols))))
+        click.echo()
 
 
 if __name__ == "__main__":
