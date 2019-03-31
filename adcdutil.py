@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 
 import click
@@ -154,14 +153,26 @@ def extractVolume(filename, dist, volume, dest=None, overwrite=False):
 
 @click.group()
 def cli():
+    """A simple CLI to inspect and convert ADCD distributions into a format usable by the Hercules emulator."""
     pass
 
 
 @cli.command()
-@click.option("-d", "--destination", type=click.Path(exists=True, file_okay=False))
-@click.option("-f", "--force/--no-force", default=False)
 @click.option(
-    "-c", "--compression", type=click.Choice(["zlib", "bzip2", "none"]), default="zlib"
+    "-d",
+    "--destination",
+    type=click.Path(exists=True, file_okay=False),
+    help="Path for the conversion output.",
+)
+@click.option(
+    "-f", "--force/--no-force", default=False, help="Overwrite existing files."
+)
+@click.option(
+    "-c",
+    "--compression",
+    type=click.Choice(["zlib", "bzip2", "none"]),
+    default="zlib",
+    help="Compression format.",
 )
 @click.option("-q", "--quiet/--verbose", default=False)
 @click.option(
@@ -169,9 +180,11 @@ def cli():
     "--output-format",
     type=click.Choice(["CKD", "CCKD", "FBA", "CFBA"]),
     default="CCKD",
+    help="Volume output format.",
 )
 @click.argument("iso", type=click.Path(exists=True, dir_okay=False))
 def convert(destination, force, compression, quiet, output_format, iso):
+    """Convert ADCD image into Hercules formats."""
     requireCommands(["dasdcopy", "hetupd", "unzip"])
     iso_tapes = getTapes(iso)
     if not iso_tapes:
@@ -255,6 +268,7 @@ def convert(destination, force, compression, quiet, output_format, iso):
 @cli.command()
 @click.argument("iso", type=click.Path(exists=True, dir_okay=False))
 def dump(iso):
+    """Dump details and contents of an ADCD image."""
     iso_tapes = getTapes(iso)
     if iso_tapes:
         for dist, tapes in iso_tapes.items():
