@@ -11,6 +11,7 @@ import zipfile
 
 import click
 from pycdlib import PyCdlib
+from pycdlib.pycdlibexception import PyCdlibInvalidInput
 
 
 def requireCommands(commands):
@@ -56,6 +57,23 @@ def checkPath(path, overwrite=False):
         return False
 
 
+def extractZip(zip_filename):
+    with zipfile.ZipFile(zip_filename) as zf:
+        contents = zf.namelist()
+        try:
+            zf.testzip()
+            for fname in contents:
+                yield (fname, zf.open(fname))
+        except NotImplementedError as e:
+            for fname in contents:
+                p = subprocess.Popen(
+                    ["unzip", "-p", zip_filename, fname],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                yield (fname, p.stdout)
+
+
 def extractVolume(filename, dist, volume, dest=None, overwrite=False):
     if dest is None:
         dest = os.getcwd()
@@ -64,18 +82,22 @@ def extractVolume(filename, dist, volume, dest=None, overwrite=False):
     iso = PyCdlib()
     iso.open(filename)
     with tempfile.NamedTemporaryFile(dir=dest) as fp:
-        iso.get_file_from_iso_fp(
-            fp, iso_path=os.path.join("/", dist, "{}.ZIP;1".format(volume))
-        )
-        with zipfile.ZipFile(fp.name) as zf:
-            contents = zf.namelist()
-            for fname in contents:
-                image_name = os.path.basename(fname)
-                image = os.path.join(dest, image_name)
-                checkPath(image, overwrite)
-                with open(image, "wb+") as f:
-                    f.write(zf.read(fname))
-                images.append(image)
+        try:
+            iso.get_file_from_iso_fp(
+                fp, iso_path=os.path.join("/", dist, "{}.ZIP;1".format(volume))
+            )
+        except PyCdlibInvalidInput as e:
+            iso.get_file_from_iso_fp(
+                fp, iso_path=os.path.join("/", dist, "{}.ZIP".format(volume))
+            )
+
+        for fname, zfp in extractZip(fp.name):
+            image_name = os.path.basename(fname)
+            image = os.path.join(dest, image_name)
+            checkPath(image, overwrite)
+            with open(image, "wb+") as f:
+                f.write(zfp.read())
+            images.append(image)
 
     iso.close()
 
@@ -102,7 +124,7 @@ def cli():
 )
 @click.argument("iso", type=click.Path(exists=True, dir_okay=False))
 def convert(destination, force, compression, quiet, output_format, iso):
-    requireCommands(["dasdcopy"])
+    requireCommands(["dasdcopy", "unzip"])
     volumes = getVolumes(iso)
     if not volumes:
         click.echo("No volumes found!", err=True)
